@@ -2,17 +2,20 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
-	"os"
-	"strings"
+
+	// "os"
 	"time"
 
-	telegramBotAPI "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	"gorm.io/driver/postgres"
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
+
+	// telegramBotAPI "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
 )
@@ -25,38 +28,36 @@ const (
 	dbname   = "telegram"
 )
 
-var (
+type Usuario struct {
+	ID        uint
+	Nome      string
+	Sobrenome string
+	Email     string
+	Cpf       string
+	Idade     uint
+	CreateAt  time.Time
+	UpdateAt  time.Time
+	PlanoID   uint
+	Plano     *Plano
+}
 
-	// Menu texts
-	firstMenu  = "<b>Menu 1</b>\n\nA beautiful menu with a shiny inline button."
-	secondMenu = "<b>Menu 2</b>\n\nA better menu with even more shiny inline buttons."
+type Plano struct {
+	ID         uint
+	Tipo       string
+	Nome       string
+	Descricao  string
+	Valor      float64
+	CreateAt   time.Time
+	UpdateAt   time.Time
+	Datainicio time.Time
+	Datafim    time.Time
+	Usuarios   []*Usuario
+}
 
-	// Button texts
-	nextButton     = "Next"
-	backButton     = "Back"
-	tutorialButton = "Tutorial"
-
-	// Store bot screaming status
-	screaming = false
-	bot       *telegramBotAPI.BotAPI
-
-	// Keyboard layout for the first menu. One button, one row
-	firstMenuMarkup = telegramBotAPI.NewInlineKeyboardMarkup(
-		telegramBotAPI.NewInlineKeyboardRow(
-			telegramBotAPI.NewInlineKeyboardButtonData(nextButton, nextButton),
-		),
-	)
-
-	// Keyboard layout for the second menu. Two buttons, one per row
-	secondMenuMarkup = telegramBotAPI.NewInlineKeyboardMarkup(
-		telegramBotAPI.NewInlineKeyboardRow(
-			telegramBotAPI.NewInlineKeyboardButtonData(backButton, backButton),
-		),
-		telegramBotAPI.NewInlineKeyboardRow(
-			telegramBotAPI.NewInlineKeyboardButtonURL(tutorialButton, "https://core.telegram.org/bots/api"),
-		),
-	)
-)
+type Users struct {
+	ID   uint
+	nome string
+}
 
 func init() {
 	if err := godotenv.Load("../.env"); err != nil {
@@ -66,81 +67,24 @@ func init() {
 }
 
 func main() {
-	telegramBotToken := os.Getenv("BOT_TOKEN")
-	bot, err := telegramBotAPI.NewBotAPI(telegramBotToken)
+	dsn := "host=localhost user=postgres password=postgres dbname=telegram port=5432 sslmode=disable TimeZone=America/Sao_Paulo"
+
+	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
 
 	if err != nil {
-		fmt.Println("error in bot creation")
 		log.Panic(err)
 	}
 
-	chatID := getChatIdListFromBot(telegramBotToken)
+	plano := Plano{Tipo: "Básio", Nome: "Plano Básico", Descricao: "Plano para pobres", Valor: 29.99,
+		CreateAt: time.Now(), UpdateAt: time.Now(), Datainicio: time.Now(), Datafim: time.Now()}
 
-	if chatID == 0 {
-		log.Panic("chatID has no value")
+	result := db.Omit(clause.Associations).Create(&plano)
+
+	if result.Error != nil {
+		log.Panic(result.Error)
 	}
 
-	ticker := time.NewTicker(3 * time.Second)
-	for range ticker.C {
-		msg := telegramBotAPI.NewMessage(chatID, "Seu plano mensal está perto do vencimento!")
-
-		_, err = bot.Send(msg)
-		if err != nil {
-			fmt.Println("error in bot send")
-			log.Panic(err)
-		}
-	}
-
-	// time.Sleep(5 * time.Second)
-
-	// psqlInfo := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=disable",
-	// 	host, port, user, password, dbname)
-
-	// db, err := sql.Open("postgres", psqlInfo)
-
-	// if err != nil {
-	// 	panic(err)
-	// }
-
-	// defer db.Close()
-
-	// err = db.Ping()
-	// if err != nil {
-	// 	panic(err)
-	// }
-
-	// fmt.Println("Successfully connected")
-
-	// var err error
-	// bot, err = tgbotapi.NewBotAPI("6713538459:AAEf__EIUb15ZfOi1Cmir1vV9qtI8VUM3Mw")
-	// if err != nil {
-	// 	// Abort if something is wrong
-	// 	log.Panic(err)
-	// }
-
-	// // Set this to true to log all interactions with telegram servers
-	// bot.Debug = false
-
-	// u := tgbotapi.NewUpdate(0)
-	// u.Timeout = 60
-
-	// // Create a new cancellable background context. Calling `cancel()` leads to the cancellation of the context
-	// ctx := context.Background()
-	// ctx, cancel := context.WithCancel(ctx)
-
-	// // `updates` is a golang channel which receives telegram updates
-	// updates := bot.GetUpdatesChan(u)
-
-	// // Pass cancellable context to goroutine
-	// go receiveUpdates(ctx, updates)
-
-	// // Tell the user the bot is online
-	// log.Println("Start listening for updates. Press enter to stop")
-
-	// // Wait for a newline symbol, then cancel handling updates
-	// bufio.NewReader(os.Stdin).ReadBytes('\n')
-	// cancel()
-
+	fmt.Println(result.RowsAffected)
 }
 
 func getChatIdListFromBot(telegramBotToken string) int64 {
@@ -201,114 +145,4 @@ func formatJSON(data []byte) string {
 
 	d := out.Bytes()
 	return string(d)
-}
-
-func receiveUpdates(ctx context.Context, updates telegramBotAPI.UpdatesChannel) {
-	// `for {` means the loop is infinite until we manually stop it
-	for {
-		select {
-		// stop looping if ctx is cancelled
-		case <-ctx.Done():
-			return
-		// receive update from channel and then handle it
-		case update := <-updates:
-			handleUpdate(update)
-		}
-	}
-}
-
-func handleUpdate(update telegramBotAPI.Update) {
-	switch {
-	// Handle messages
-	case update.Message != nil:
-		handleMessage(update.Message)
-		break
-
-	// Handle button clicks
-	case update.CallbackQuery != nil:
-		handleButton(update.CallbackQuery)
-		break
-	}
-}
-
-func handleMessage(message *telegramBotAPI.Message) {
-	user := message.From
-	text := message.Text
-
-	if user == nil {
-		return
-	}
-
-	// Print to console
-	log.Printf("%s wrote %s", user.FirstName, text)
-
-	var err error
-	if strings.HasPrefix(text, "/") {
-		err = handleCommand(message.Chat.ID, text)
-	} else if screaming && len(text) > 0 {
-		msg := telegramBotAPI.NewMessage(message.Chat.ID, strings.ToUpper(text))
-		// To preserve markdown, we attach entities (bold, italic..)
-		msg.Entities = message.Entities
-		_, err = bot.Send(msg)
-	} else {
-		// This is equivalent to forwarding, without the sender's name
-		copyMsg := telegramBotAPI.NewCopyMessage(message.Chat.ID, message.Chat.ID, message.MessageID)
-		_, err = bot.CopyMessage(copyMsg)
-	}
-
-	if err != nil {
-		log.Printf("An error occured: %s", err.Error())
-	}
-}
-
-// When we get a command, we react accordingly
-func handleCommand(chatId int64, command string) error {
-	var err error
-
-	switch command {
-	case "/scream":
-		screaming = true
-		break
-
-	case "/whisper":
-		screaming = false
-		break
-
-	case "/menu":
-		err = sendMenu(chatId)
-		break
-	}
-
-	return err
-}
-
-func handleButton(query *telegramBotAPI.CallbackQuery) {
-	var text string
-
-	markup := telegramBotAPI.NewInlineKeyboardMarkup()
-	message := query.Message
-
-	if query.Data == nextButton {
-		text = secondMenu
-		markup = secondMenuMarkup
-	} else if query.Data == backButton {
-		text = firstMenu
-		markup = firstMenuMarkup
-	}
-
-	callbackCfg := telegramBotAPI.NewCallback(query.ID, "")
-	bot.Send(callbackCfg)
-
-	// Replace menu text and keyboard
-	msg := telegramBotAPI.NewEditMessageTextAndMarkup(message.Chat.ID, message.MessageID, text, markup)
-	msg.ParseMode = telegramBotAPI.ModeHTML
-	bot.Send(msg)
-}
-
-func sendMenu(chatId int64) error {
-	msg := telegramBotAPI.NewMessage(chatId, firstMenu)
-	msg.ParseMode = telegramBotAPI.ModeHTML
-	msg.ReplyMarkup = firstMenuMarkup
-	_, err := bot.Send(msg)
-	return err
 }
